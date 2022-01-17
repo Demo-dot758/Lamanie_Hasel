@@ -20,7 +20,8 @@ using namespace std;
 
 char kodyMD5[ARRAY_SIZE][MD5_LENGTH];   //tablica statyczna kodów MD55
 vector<string> dictionary;              //słownik
-
+vector<string> found_words;
+vector<string> found_md5;
 
 struct {
     pthread_mutex_t mutex;
@@ -37,13 +38,16 @@ int work=1;
 int tablica[1000];
  
 // **** Po otrzymaniu syngału SIGHUP konsument wyświetla podsumowanie
-// signal(SIGHUP,signalHandler)
 void signalHandler(int signum)
 {
     std::cout << "Interrupt signal (" << signum << ") received.\n";
     work=0;
-
-    std::exit(signum);
+    for(int i=0;i<found_words.size();i++)
+    {
+        std::cout << "Numer:" << i << " Slowo:" << found_words.at(i) << " MD5:" << found_md5.at(i) << std::endl;
+        // printf("Numer: %d, slowo: %s, kod: %s\n",i,found_words.at(i),found_md5.at(i));
+    }
+    exit(1);
 }
 
 
@@ -84,7 +88,6 @@ void loadData(){
 }
 void *Consumer(void *args)
 {   
-    // pthread_setcancelstate(PTHREAD_CANCEL_ASYNCHRONOUS,NULL);
     while(work)
     {
         
@@ -96,6 +99,8 @@ void *Consumer(void *args)
 
         printf("Znaleziono słowo:%s o kodzie %s.\n", global.password.c_str(),global.code);
 
+        found_words.push_back(global.password);
+        found_md5.push_back(global.code);
         global.ready--;
 
         pthread_mutex_unlock(&global.mutex);
@@ -103,10 +108,8 @@ void *Consumer(void *args)
     pthread_exit(NULL);
 }
 
-/*  Wątek 0
+/*  Wątek 10
     Działa na małych literach, dodaje liczby na końcu
-    -nie działa dodawanie liczb 01234 itd.
-    -nie działa przesyłanie do wątku głównego
 */
 void *Producer10(void *args)
 {
@@ -132,14 +135,13 @@ void *Producer10(void *args)
         {
             mess = dictionary.at(i)+number;
         }
-        // }else
+        // else
         //     mess = dictionary.at(i);
 
         const char *mess1 = mess.c_str();
 
         /* Haszowanie słownika */
         EVP_DigestInit_ex(mdctx, md,NULL);
-        // std::cout << "Word is: " << mess1 << std::endl;
         EVP_DigestUpdate(mdctx,mess1,strlen(mess1));
         EVP_DigestFinal_ex(mdctx, md_value, &md_len);
         
@@ -150,26 +152,19 @@ void *Producer10(void *args)
 
         // Sprawdzenie czy kod MD5 z pliku został znaleziony    
         for(int c=0;c<ARRAY_SIZE;c++)
-            if((strncmp(md5string,kodyMD5[c],32)==0))//&&(tablica[i]==0))
+            if((strncmp(md5string,kodyMD5[c],32)==0&&(tablica[c]==0)))
             {
                 pthread_mutex_lock(&global.mutex);
                 global.code=md5string;
                 global.password=mess;
                 global.index=c;
-                // std::cout << "Znaleziono match, word: " << mess << " " << kodyMD5[c] << " " << md5string << std::endl;
-                // tablica[i]=1;
-                puts("Watek 1 wykryl slowo");
+                tablica[c]=1;
+                // puts("Watek 1 wykryl slowo");
                 global.ready++;
                 pthread_cond_signal(&global.cond);
                 pthread_mutex_unlock(&global.mutex);
                 sleep(0.1);
                 break;
-                // std::unique_lock<std::mutex> ul(m);
-                // m_ready=true;
-                // ul.unlock();
-                // m_cv.notify_one();
-                // ul.lock();
-                // m_cv.wait(ul,[](){return m_ready})
             }
         }
     
@@ -179,6 +174,75 @@ void *Producer10(void *args)
     pthread_exit(NULL);
 }
 
+
+/*  Wątek 11
+    Działa na małych literach, dodaje liczby na końcu i na poczatku
+*/
+void *Producer11(void *args)
+{
+    EVP_MD_CTX *mdctx;
+    const EVP_MD *md;
+    unsigned char md_value[32];
+    unsigned int md_len;
+    md = EVP_get_digestbyname("MD5");
+    mdctx = EVP_MD_CTX_new();
+
+   
+    int num = 0;
+    while(1)
+    {
+    for(int i=0;i<dictionary.size();i++)
+    {   
+        for(int k=0;k<pow(10,num);k++)
+        {
+        string number;
+        number+=to_string(k);
+        string mess;
+        if(num>0)
+        {
+            mess = number+dictionary.at(i)+number;
+        }
+
+        const char *mess1 = mess.c_str();
+
+        /* Haszowanie słownika */
+        EVP_DigestInit_ex(mdctx, md,NULL);
+        EVP_DigestUpdate(mdctx,mess1,strlen(mess1));
+        EVP_DigestFinal_ex(mdctx, md_value, &md_len);
+        
+        // Zamiana hexa
+        char md5string[32];
+        for(int j=0;j<md_len;j++)
+            sprintf(&md5string[j*2],"%02x",md_value[j]);
+
+        // Sprawdzenie czy kod MD5 z pliku został znaleziony    
+        for(int c=0;c<ARRAY_SIZE;c++)
+            if((strncmp(md5string,kodyMD5[c],32)==0)&&(tablica[c]==0))
+            {
+                pthread_mutex_lock(&global.mutex);
+                global.code=md5string;
+                global.password=mess;
+                global.index=c;
+                tablica[c]=1;
+                // puts("Watek 2 wykryl slowo");
+                global.ready++;
+                pthread_cond_signal(&global.cond);
+                pthread_mutex_unlock(&global.mutex);
+                sleep(0.1);
+                break;
+                
+            }
+        }
+    
+    }
+    num++;
+    }
+    pthread_exit(NULL);
+}
+
+/*  Wątek 12
+    Działa na wielkich literach, dodaje liczby na końcu
+*/
 void *Producer12(void *args)
 {
     EVP_MD_CTX *mdctx;
@@ -204,9 +268,8 @@ void *Producer12(void *args)
         if(num>0)
         {
             mess = dictionary.at(i)+number;
-        }
-        // }else
-        //     mess = dictionary.at(i);
+        }else
+            mess = dictionary.at(i);
 
        
         // UPPERCASE LETTERS 
@@ -226,21 +289,88 @@ void *Producer12(void *args)
 
         // Sprawdzenie czy kod MD5 z pliku został znaleziony    
         for(int c=0;c<ARRAY_SIZE;c++)
-            if((strncmp(md5string,kodyMD5[c],32)==0)) //&&(tablica[i]==0))
+            if((strncmp(md5string,kodyMD5[c],32)==0)&&(tablica[c]==0))
             {
                 pthread_mutex_lock(&global.mutex);
                 global.code=md5string;
                 global.password=mess;
                 global.index=c;
-                // tablica[i]=1;
-                // std::cout << "Znaleziono match, word: " << mess << " " << kodyMD5[c] << " " << md5string << std::endl;
-                puts("Watek 2 wykryl slowo");
+                tablica[c]=1;
+                // puts("Watek 3 wykryl slowo");
                 global.ready++;
                 pthread_cond_signal(&global.cond);
                 pthread_mutex_unlock(&global.mutex);
                 sleep(0.1);
                 break;
-                // found_words.push_back(md5string);
+            }
+        }
+    }
+    num++;
+    }
+    pthread_exit(NULL);
+}
+
+/*  Wątek 10
+    Działa na małych literach, skleja ze sobą słowa, a następnie dodaje liczby na końcu
+*/
+void *Producer20(void *args)
+{
+      EVP_MD_CTX *mdctx;
+    const EVP_MD *md;
+    unsigned char md_value[32];
+    unsigned int md_len;
+    md = EVP_get_digestbyname("MD5");
+    mdctx = EVP_MD_CTX_new();
+
+    int num =0;
+    int x=0;
+
+
+    while(1)
+    {
+    for(int i=0;i<dictionary.size();i++)
+    {   
+        for(int k=0;k<pow(10,num);k++)
+        {
+            for(int d=0;d<dictionary.size();d++)
+            {
+            string number;
+            number+=to_string(k);
+            string mess;
+            if(num>0)
+            {
+                mess = dictionary.at(i)+dictionary.at(d)+number;
+            }else
+                mess = dictionary.at(i)+dictionary.at(d);
+
+            const char *mess1 = mess.c_str();
+
+            /* Haszowanie słowa */
+            EVP_DigestInit_ex(mdctx, md,NULL);
+            EVP_DigestUpdate(mdctx,mess1,strlen(mess1));
+            EVP_DigestFinal_ex(mdctx, md_value, &md_len);
+
+            // Zamiana formatu
+            char md5string[32];
+            for(int j=0;j<md_len;j++)
+                sprintf(&md5string[j*2],"%02x",md_value[j]);
+
+            // Sprawdzenie czy kod MD5 z pliku został znaleziony    
+            for(int c=0;c<ARRAY_SIZE;c++)
+                if((strncmp(md5string,kodyMD5[c],32)==0)&&(tablica[c]==0))
+                {
+                    pthread_mutex_lock(&global.mutex);
+                    global.code=md5string;
+                    global.password=mess;
+                    global.index=c;
+                    tablica[c]=1;
+                    // puts("Watek 4 wykryl slowo");
+                    global.ready++;
+                    pthread_cond_signal(&global.cond);
+                    pthread_mutex_unlock(&global.mutex);
+                    sleep(0.1);
+                    break;
+                }
             }
         }
     }
@@ -252,11 +382,9 @@ int main(int argc,char *argv[])
 {
     loadData();
 
+    signal(SIGHUP,signalHandler);
 
-    // Vector of threads
-    // std::vector<thread> producer_threads;
-
-    pthread_t threads[3];
+    pthread_t threads[5];
 
     pthread_mutex_init(&global.mutex,NULL);
     pthread_cond_init(&global.cond,NULL);
@@ -264,37 +392,13 @@ int main(int argc,char *argv[])
 
     pthread_create(&threads[0],NULL,&Consumer,NULL);
     pthread_create(&threads[1],NULL,&Producer10,NULL);
-    pthread_create(&threads[2],NULL,&Producer12,NULL);
+    pthread_create(&threads[2],NULL,&Producer11,NULL);
+    pthread_create(&threads[3],NULL,&Producer12,NULL);
+    pthread_create(&threads[4],NULL,&Producer20,NULL);
 
-
-    // thread producer12(Producer12);
-    
-    // for(int i=0;i<NUM_THREADS;i++)
-    // {
-    //     producer_threads.push_back(thread(Producer));
-    // }
-    
-    
-
-    // for (thread &p : producer_threads) 
-    // {
-    //     if (p.joinable())
-    //     {
-    //         p.join();
-    //     }
-    // }
-    // for(int i=0;i<4;i++)
-   
-    
 
     pthread_mutex_destroy(&global.mutex);
     pthread_cond_destroy(&global.cond);
     pthread_exit (NULL);
-//    for (int i = 0; i < 3; i++)
-//         pthread_join(threads[i], NULL);
-    // producer12.join();
 
-    // for(int num=0;i<Struktura.found_words.size();num++)
-    //     cout << Struktura.found_words[num] << endl;
-    // return 0;
 }
